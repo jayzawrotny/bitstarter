@@ -28,7 +28,10 @@ var rest = require('restler');
 
 var HTMLFILE_DEFAULT = false;
 var URL_DEFAULT = false;
+var FORMAT_DEFAULT = "JSON";
 var CHECKSFILE_DEFAULT = "checks.json";
+
+var outputFormats = {};
 
 var assertFileExists = function(infile) {
     var instr = infile.toString();
@@ -44,10 +47,23 @@ var assertURLExists = function(inurl) {
     if(instr) {
         return instr;
     } else {
-        console.log("No URL specified.");
+        console.log("Invalid URL specified.");
         process.exit(1);
     }
 };
+
+var assertFormatExists = function(format) {
+    var outputFormat = format.toUpperCase();
+    var output = outputFormats[outputFormat];
+    var formats = Object.keys(outputFormats).join(', ');
+
+    if ( typeof output === 'function' ) {
+        return outputFormat;
+    } else {
+        console.error("Invalid output format. Accepted values are: " + formats); 
+        process.exit(1);
+    }
+}
 
 var loadChecks = function(checksfile) {
     return JSON.parse(fs.readFileSync(checksfile));
@@ -56,6 +72,7 @@ var loadChecks = function(checksfile) {
 var processHTML = function(html, checks) {
     var $ = cheerio.load(html);
     var out = {};
+
     for(var ii in checks) {
         var present = $(checks[ii]).length > 0;
         out[checks[ii]] = present;
@@ -67,10 +84,12 @@ var processHTML = function(html, checks) {
 var outputJSON = function(output) {
     output = JSON.stringify(output, null, 4);
     console.log(output);
-    return;
+    return output;
 };
 
-var checkHTML = function(source, outputFormat) {
+outputFormats['JSON'] = outputJSON;
+
+var buildCheckCallback = function(source, outputFormat) {
     return function(html, checksfile) {
         var checkResults = processHTML(html, checksfile);
         console.log('Results from: ' + source ); 
@@ -78,17 +97,22 @@ var checkHTML = function(source, outputFormat) {
     };
 };
 
-var checkFromInput = function(htmlfile, url, checksfile) {
+var checkHTML = function(sourcesToCheck, checksfile, output) {
     var checks = loadChecks(checksfile).sort();
+    var outputFormatter = outputFormats[output] || FORMAT_DEFAULT;
+    var hasRan = false;
 
-    if (url) {
-        checkURL(url, checks, checkHTML(url, outputJSON));
+    for (var key in sourcesToCheck) {
+        var source = sourcesToCheck[key];
+        if ( ! source.input ) {
+            continue;
+        }
+
+        source.process(source.input, checks, buildCheckCallback(source.input, outputFormatter));
+        hasRan = true;
     }
-    if (htmlfile) {
-        checkFile(htmlfile, checks, checkHTML(htmlfile, outputJSON));
-    } 
 
-    if (! url && ! htmlfile) {
+    if (! hasRan) {
         console.error('No valid input given.');
         process.exit(1);
     }
@@ -121,10 +145,15 @@ if(require.main == module) {
         .option('-f, --file <html_file>', 'Path to index.html', clone(assertFileExists), HTMLFILE_DEFAULT)
         .option('-u, --url <url>', 'URL to html file.', clone(assertURLExists), URL_DEFAULT)
 
+        .option('-o, --output <output>', 'Output Format', clone(assertFormatExists), FORMAT_DEFAULT)
+
         .parse(process.argv);
 
         // Based on what input we have, use the proper one to check.
-        checkFromInput(program.file, program.url, program.checks);
+        checkHTML([ 
+            { input: program.file, process: checkFile },
+            { input: program.url, process: checkURL }
+            ], program.checks, program.output);
 } else {
     exports.checkHtmlFile = checkHtmlFile;
 }
