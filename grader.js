@@ -26,7 +26,7 @@ var program = require('commander');
 var cheerio = require('cheerio');
 var rest = require('restler');
 
-var HTMLFILE_DEFAULT = "index.html";
+var HTMLFILE_DEFAULT = false;
 var URL_DEFAULT = false;
 var CHECKSFILE_DEFAULT = "checks.json";
 
@@ -38,6 +38,7 @@ var assertFileExists = function(infile) {
     }
     return instr;
 };
+
 var assertURLExists = function(inurl) {
     var instr = inurl.toString();
     if(instr) {
@@ -48,44 +49,62 @@ var assertURLExists = function(inurl) {
     }
 };
 
-var cheerioHtmlFile = function(htmlfile) {
-    return cheerio.load(fs.readFileSync(htmlfile));
-};
-
-var cheerioHtml = function(html) {
-    return cheerio.load(html);
-};
-
 var loadChecks = function(checksfile) {
     return JSON.parse(fs.readFileSync(checksfile));
 };
 
-var checkHtmlFile = function(htmlfile, checksfile) {
-    $ = cheerioHtmlFile(htmlfile);
-    var checks = loadChecks(checksfile).sort();
+var processHTML = function(html, checks) {
+    var $ = cheerio.load(html);
     var out = {};
     for(var ii in checks) {
         var present = $(checks[ii]).length > 0;
         out[checks[ii]] = present;
     }
+
     return out;
 };
 
-var checkURL = function(url, checksfile) {
+var outputJSON = function(output) {
+    output = JSON.stringify(output, null, 4);
+    console.log(output);
+    return;
+};
+
+var checkHTML = function(source, outputFormat) {
+    return function(html, checksfile) {
+        var checkResults = processHTML(html, checksfile);
+        console.log('Results from: ' + source ); 
+        outputFormat(checkResults);
+    };
+};
+
+var checkFromInput = function(htmlfile, url, checksfile) {
     var checks = loadChecks(checksfile).sort();
-    var out = {};
+
+    if (url) {
+        checkURL(url, checks, checkHTML(url, outputJSON));
+    }
+    if (htmlfile) {
+        checkFile(htmlfile, checks, checkHTML(htmlfile, outputJSON));
+    } 
+
+    if (! url && ! htmlfile) {
+        console.error('No valid input given.');
+        process.exit(1);
+    }
+};
+var checkFile = function(htmlfile, checksfile, callback) {
+    var html = fs.readFileSync(htmlfile);
+    callback(html, checksfile);
+};
+
+var checkURL = function(url, checksfile, callback) {
     rest.get(url).on('complete', function(result) {
         if (result instanceof Error) {
             console.error('Error: ' + result.message);
             process.exit(1);
         } else {
-            var $ = cheerioHtml(result);
-            for(var ii in checks) {
-                var present = $(checks[ii]).length > 0;
-                out[checks[ii]] = present;
-            }
-            var outJson = JSON.stringify(out, null, 4);
-            console.log(outJson);
+            callback(result, checksfile);
         }
     });
 }
@@ -101,15 +120,11 @@ if(require.main == module) {
         .option('-c, --checks <check_file>', 'Path to checks.json', clone(assertFileExists), CHECKSFILE_DEFAULT)
         .option('-f, --file <html_file>', 'Path to index.html', clone(assertFileExists), HTMLFILE_DEFAULT)
         .option('-u, --url <url>', 'URL to html file.', clone(assertURLExists), URL_DEFAULT)
+
         .parse(process.argv);
-    if(program.file && !program.url) {
-        var checkJson = checkHtmlFile(program.file, program.checks);
-        var outJson = JSON.stringify(checkJson, null, 4);
-        console.log(outJson);
-    }
-    else if(program.url) {
-        var checkJson = checkURL(program.url, program.checks);
-    }
+
+        // Based on what input we have, use the proper one to check.
+        checkFromInput(program.file, program.url, program.checks);
 } else {
     exports.checkHtmlFile = checkHtmlFile;
 }
